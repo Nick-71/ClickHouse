@@ -3,6 +3,8 @@
 namespace DB
 {
 
+// TODO make sure we never emit empty chunks otherwise processing stops :-(
+
 SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_)
     : ISource(std::move(header))
     , chunks(std::move(chunks_))
@@ -16,7 +18,7 @@ SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && oth
     , it(chunks.begin())
     , chunk_totals(std::move(other))
 {
-    chassert(!chunk_totals.empty());
+    chassert(!chunk_totals->empty());
 }
 
 SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && other,  WithExtremesOutputTag tag)
@@ -25,7 +27,7 @@ SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && oth
     , it(chunks.begin())
     , chunk_extremes(std::move(other))
 {
-    chassert(!chunk_extremes.empty());
+    chassert(!chunk_extremes->empty());
 }
 
 SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && totals_, Chunk && extremes_)
@@ -35,8 +37,8 @@ SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && tot
     , chunk_totals(std::move(totals_))
     , chunk_extremes(std::move(extremes_))
 {
-    chassert(!chunk_totals.empty());
-    chassert(!chunk_extremes.empty());
+    chassert(!chunk_totals->empty());
+    chassert(!chunk_extremes->empty());
 }
 
 SourceFromChunks::Status SourceFromChunks::prepare()
@@ -51,7 +53,7 @@ SourceFromChunks::Status SourceFromChunks::prepare()
         finished_chunks = true;
     }
 
-    if (!chunk_totals.empty())
+    if (chunk_totals.has_value())
     {
         chassert(getTotalsPort());
 
@@ -64,11 +66,11 @@ SourceFromChunks::Status SourceFromChunks::prepare()
         /// chassert(!getTotalsPort()->isFinished());
         /// chassert(getTotalsPort()->canPush());
 
-        getTotalsPort()->push(std::move(chunk_totals));
+        getTotalsPort()->push(std::move(*chunk_totals));
         getTotalsPort()->finish();
     }
 
-    if (!chunk_extremes.empty())
+    if (chunk_extremes.has_value())
     {
         chassert(getExtremesPort());
 
@@ -81,7 +83,7 @@ SourceFromChunks::Status SourceFromChunks::prepare()
         /// chassert(!getExtremesPort()->isFinished());
         /// chassert(getExtremesPort()->canPush());
 
-        getExtremesPort()->push(std::move(chunk_extremes));
+        getExtremesPort()->push(std::move(*chunk_extremes));
         getExtremesPort()->finish();
     }
 

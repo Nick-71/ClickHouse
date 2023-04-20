@@ -11,7 +11,7 @@ namespace DB
 class SourceFromChunks : public ISource
 {
 public:
-    /// Totals/extremes must be single chunks each. If there are no totals or extremes, pass in an empty chunks.
+    /// Totals/extremes must be single chunks each and (if specified) they are assumed to be non-empty.
     SourceFromChunks(Block header, Chunks && chunks_);
     SourceFromChunks(Block header, Chunks && chunks_, Chunk && other,  WithTotalsOutputTag tag);
     SourceFromChunks(Block header, Chunks && chunks_, Chunk && other,  WithExtremesOutputTag tag);
@@ -29,8 +29,8 @@ private:
     Chunks chunks;
     Chunks::iterator it;
 
-    Chunk chunk_totals;
-    Chunk chunk_extremes;
+    std::optional<Chunk> chunk_totals = std::nullopt;
+    std::optional<Chunk> chunk_extremes = std::nullopt;
 
     bool finished_chunks = false;
 };
