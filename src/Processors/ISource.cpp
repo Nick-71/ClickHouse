@@ -13,9 +13,34 @@ namespace ErrorCodes
 ISource::~ISource() = default;
 
 ISource::ISource(Block header, bool enable_auto_progress)
-    : IProcessor({}, {std::move(header)})
+    : IProcessor({}, {header})
     , auto_progress(enable_auto_progress)
-    , output(outputs.front())
+    , output(*outputs.begin())
+{
+}
+
+ISource::ISource(Block header, WithTotalsOutputTag, bool enable_auto_progress)
+    : IProcessor({}, {header, header})
+    , auto_progress(enable_auto_progress)
+    , output(*outputs.begin())
+    , output_totals(&*++outputs.begin())
+{
+}
+
+ISource::ISource(Block header, WithExtremesOutputTag, bool enable_auto_progress)
+    : IProcessor({}, {header, header})
+    , auto_progress(enable_auto_progress)
+    , output(*outputs.begin())
+    , output_extremes(&*++outputs.begin())
+{
+}
+
+ISource::ISource(Block header, WithTotalsAndExtremesOutputTag, bool enable_auto_progress)
+    : IProcessor({}, {header, header, header})
+    , auto_progress(enable_auto_progress)
+    , output(*outputs.begin())
+    , output_totals(&*++outputs.begin())
+    , output_extremes(&*++++outputs.begin())
 {
 }
 
@@ -124,7 +149,7 @@ std::optional<Chunk> ISource::tryGenerate()
 {
     auto chunk = generate();
     if (!chunk)
-        return {};
+        return std::nullopt;
 
     return chunk;
 }

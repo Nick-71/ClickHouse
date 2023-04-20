@@ -15,6 +15,8 @@ private:
 
 protected:
     OutputPort & output;
+    OutputPort * output_totals = nullptr;
+    OutputPort * output_extremes = nullptr;
     bool has_input = false;
     bool finished = false;
     bool got_exception = false;
@@ -28,7 +30,19 @@ protected:
     virtual void progress(size_t read_rows, size_t read_bytes);
 
 public:
+
     explicit ISource(Block header, bool enable_auto_progress = true);
+
+    struct WithTotalsOutputTag {};
+    struct WithExtremesOutputTag {};
+    struct WithTotalsAndExtremesOutputTag {};
+
+    /// Use these constructors if the derived source also needs to produce totals and/or extremes.
+    /// All output ports will have the same column structure given by 'header'.
+    ISource(Block header, WithTotalsOutputTag tag, bool enable_auto_progress = true);
+    ISource(Block header, WithExtremesOutputTag tag, bool enable_auto_progress = true);
+    ISource(Block header, WithTotalsAndExtremesOutputTag tag, bool enable_auto_progress = true);
+
     ~ISource() override;
 
     Status prepare() override;
@@ -36,6 +50,12 @@ public:
 
     OutputPort & getPort() { return output; }
     const OutputPort & getPort() const { return output; }
+
+    OutputPort * getTotalsPort() { return output_totals; }
+    const OutputPort * getTotalsPort() const { return output_totals; }
+
+    OutputPort * getExtremesPort() { return output_extremes; }
+    const OutputPort * getExtremesPort() const { return output_extremes; }
 
     void setStorageLimits(const std::shared_ptr<const StorageLimitsList> & storage_limits_) override;
 

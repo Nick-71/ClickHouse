@@ -338,7 +338,40 @@ QueryCache::Reader::Reader(Cache & cache_, const Key & key, const std::lock_guar
             decompressed_chunks.push_back(std::move(decompressed_chunk));
         }
 
-        pipe = Pipe(std::make_shared<SourceFromChunks>(entry->key.header, decompressed_chunks));
+        /// pipe = Pipe(std::make_shared<SourceFromChunks>(entry->key.header, std::move(decompressed_chunks)));
+
+        Chunk totals;
+        for (const auto & c : decompressed_chunks)
+        {
+            if (!c.empty())
+            {
+                // for test purposes, clone the 1st non-empty chunk of the result
+                // TODO: Totals and extremes must be single chunks each!
+                totals = c.clone();
+                break;
+            }
+        }
+
+        Chunk extremes;
+        for (const auto & c : decompressed_chunks)
+        {
+            if (!c.empty())
+            {
+                extremes = c.clone();
+                break;
+            }
+        }
+
+        auto source_from_chunks = std::make_shared<SourceFromChunks>(entry->key.header, std::move(decompressed_chunks), std::move(totals), std::move(extremes));
+
+        auto out_it = source_from_chunks->getOutputs().begin();
+        auto * out1 = &*out_it;
+        out_it++;
+        auto * out2 = &*out_it;
+        out_it++;
+        auto * out3 = &*out_it;
+
+        pipe = Pipe(source_from_chunks, out1, out2, out3);
     }
 
     LOG_TRACE(&Poco::Logger::get("QueryCache"), "Entry found for query {}", key.queryStringFromAst());
