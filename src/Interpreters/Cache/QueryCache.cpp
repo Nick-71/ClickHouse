@@ -323,7 +323,7 @@ QueryCache::Reader::Reader(Cache & cache_, const Key & key, const std::lock_guar
         pipe = Pipe(std::make_shared<SourceFromChunks>(entry->key.header, entry->mapped));
     else
     {
-        auto decompressed_chunks = std::make_shared<Chunks>();
+        Chunks decompressed_chunks;
         const Chunks & compressed_chunks = *entry->mapped;
         for (const auto & compressed_chunk : compressed_chunks)
         {
@@ -335,7 +335,7 @@ QueryCache::Reader::Reader(Cache & cache_, const Key & key, const std::lock_guar
                 decompressed_columns.push_back(column);
             }
             Chunk decompressed_chunk(decompressed_columns, compressed_chunk.getNumRows());
-            decompressed_chunks->push_back(std::move(decompressed_chunk));
+            decompressed_chunks.push_back(std::move(decompressed_chunk));
         }
 
         pipe = Pipe(std::make_shared<SourceFromChunks>(entry->key.header, decompressed_chunks));
