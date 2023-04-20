@@ -156,11 +156,15 @@ size_t QueryCache::KeyHasher::operator()(const Key & key) const
     return res;
 }
 
-size_t QueryCache::QueryResultWeight::operator()(const Chunks & chunks) const
+size_t QueryCache::QueryCacheEntryWeight::operator()(const Entry & entry) const
 {
     size_t res = 0;
-    for (const auto & chunk : chunks)
+    for (const auto & chunk : entry.chunks)
         res += chunk.allocatedBytes();
+    if (entry.totals.has_value())
+        res += entry.totals->allocatedBytes();
+    if (entry.extremes.has_value())
+        res += entry.extremes->allocatedBytes();
     return res;
 }
 
@@ -189,16 +193,16 @@ QueryCache::Writer::Writer(Cache & cache_, const Key & key_,
     }
 }
 
-void QueryCache::Writer::buffer(Chunk && partial_query_result)
+void QueryCache::Writer::buffer(Chunk && partial_query_result_chunk)
 {
     if (skip_insert)
         return;
 
     std::lock_guard lock(mutex);
 
-    auto & chunks = *query_result;
+    auto & chunks = query_result->chunks;
 
-    chunks.emplace_back(std::move(partial_query_result));
+    chunks.emplace_back(std::move(partial_query_result_chunk));
 
     new_entry_size_in_bytes += chunks.back().allocatedBytes();
     new_entry_size_in_rows += chunks.back().getNumRows();
@@ -239,10 +243,11 @@ void QueryCache::Writer::finalizeWrite()
         // compression of neither too small nor big blocks. Also, it will look like 'max_block_size' is respected when the query result is
         // served later on from the query cache.
 
+        auto & chunks = query_result->chunks;
         Chunks squashed_chunks;
         size_t rows_remaining_in_squashed = 0; /// how many further rows can the last squashed chunk consume until it reaches max_block_size
 
-        for (auto & chunk : *query_result)
+        for (auto & chunk : chunks)
         {
             convertToFullIfSparse(chunk);
 
@@ -270,31 +275,76 @@ void QueryCache::Writer::finalizeWrite()
             }
         }
 
-        *query_result = std::move(squashed_chunks);
+        chunks = std::move(squashed_chunks);
     }
 
     if (key.is_compressed)
     {
+        auto & chunks = query_result->chunks;
         Chunks compressed_chunks;
-        const Chunks & decompressed_chunks = *query_result;
-        for (const auto & decompressed_chunk : decompressed_chunks)
+
+        for (const auto & chunk : chunks)
         {
-            const Columns & decompressed_columns = decompressed_chunk.getColumns();
+            const Columns & columns = chunk.getColumns();
             Columns compressed_columns;
-            for (const auto & decompressed_column : decompressed_columns)
+            for (const auto & column : columns)
             {
-                auto compressed_column = decompressed_column->compress();
+                auto compressed_column = column->compress();
                 compressed_columns.push_back(compressed_column);
             }
-            Chunk compressed_chunk(compressed_columns, decompressed_chunk.getNumRows());
+            Chunk compressed_chunk(compressed_columns, chunk.getNumRows());
             compressed_chunks.push_back(std::move(compressed_chunk));
         }
-        *query_result = std::move(compressed_chunks);
+        chunks = std::move(compressed_chunks);
     }
 
     cache.set(key, query_result);
 
     was_finalized = true;
+}
+
+void QueryCache::Reader::buildPipe(Block header, Chunks && chunks, const std::optional<Chunk> & totals, const std::optional<Chunk> & extremes)
+{
+    std::shared_ptr<SourceFromChunks> source_from_chunks;
+
+    OutputPort * out;
+    OutputPort * out_totals;
+    OutputPort * out_extremes;
+
+    if (totals.has_value() && extremes.has_value())
+    {
+        source_from_chunks = std::make_shared<SourceFromChunks>(header, std::move(chunks), totals->clone(), extremes->clone());
+        auto out_it = source_from_chunks->getOutputs().begin();
+        out = &*out_it;
+        out_totals = &*++out_it;
+        out_extremes = &*++++out_it;
+    }
+    else if (totals.has_value())
+    {
+        source_from_chunks = std::make_shared<SourceFromChunks>(header, std::move(chunks), totals->clone(), ISource::WithTotalsOutputTag());
+        auto out_it = source_from_chunks->getOutputs().begin();
+        out = &*out_it;
+        out_totals = &*++out_it;
+        out_extremes = nullptr;
+    }
+    else if (extremes.has_value())
+    {
+        source_from_chunks = std::make_shared<SourceFromChunks>(header, std::move(chunks), extremes->clone(), ISource::WithExtremesOutputTag());
+        auto out_it = source_from_chunks->getOutputs().begin();
+        out = &*out_it;
+        out_totals = nullptr;
+        out_extremes = &*++out_it;
+    }
+    else
+    {
+        source_from_chunks = std::make_shared<SourceFromChunks>(header, std::move(chunks));
+        auto out_it = source_from_chunks->getOutputs().begin();
+        out = &*out_it;
+        out_totals = nullptr;
+        out_extremes = nullptr;
+    }
+
+    pipe = Pipe(source_from_chunks, out, out_totals, out_extremes);
 }
 
 QueryCache::Reader::Reader(Cache & cache_, const Key & key, const std::lock_guard<std::mutex> &)
@@ -320,59 +370,61 @@ QueryCache::Reader::Reader(Cache & cache_, const Key & key, const std::lock_guar
     }
 
     if (!entry->key.is_compressed)
-        pipe = Pipe(std::make_shared<SourceFromChunks>(entry->key.header, entry->mapped));
+    {
+        // Cloning chunks isn't exactly great. It could be avoided by another indirection, i.e. wrapping Entry's members chunks, totals and
+        // extremes into shared_ptrs and assuming that the lifecycle of these shared_ptrs coincides with the lifecycle of the Entry
+        // shared_ptr. This is not done 1. to keep things simple 2. this case (uncompressed chunks) is the exceptional case, in the other
+        // case (the default case aka. compressed chunks) we need to decompress the entry anyways and couldn't apply the potential
+        // optimization.
+
+        Chunks cloned_chunks;
+        for (const auto & chunk : entry->mapped->chunks)
+            cloned_chunks.push_back(chunk.clone());
+
+        buildPipe(entry->key.header, std::move(cloned_chunks), entry->mapped->totals, entry->mapped->extremes);
+    }
     else
     {
         Chunks decompressed_chunks;
-        const Chunks & compressed_chunks = *entry->mapped;
-        for (const auto & compressed_chunk : compressed_chunks)
+        const Chunks & chunks = entry->mapped->chunks;
+        for (const auto & chunk : chunks)
         {
-            const Columns & compressed_chunk_columns = compressed_chunk.getColumns();
+            const Columns & columns = chunk.getColumns();
             Columns decompressed_columns;
-            for (const auto & compressed_column : compressed_chunk_columns)
+            for (const auto & column : columns)
             {
-                auto column = compressed_column->decompress();
-                decompressed_columns.push_back(column);
+                auto decompressed_column = column->decompress();
+                decompressed_columns.push_back(decompressed_column);
             }
-            Chunk decompressed_chunk(decompressed_columns, compressed_chunk.getNumRows());
+            Chunk decompressed_chunk(decompressed_columns, chunk.getNumRows());
             decompressed_chunks.push_back(std::move(decompressed_chunk));
         }
 
-        /// pipe = Pipe(std::make_shared<SourceFromChunks>(entry->key.header, std::move(decompressed_chunks)));
+        buildPipe(entry->key.header, std::move(decompressed_chunks), entry->mapped->totals, entry->mapped->extremes);
 
-        Chunk totals;
-        for (const auto & c : decompressed_chunks)
-        {
-            if (!c.empty())
-            {
-                // for test purposes, clone the 1st non-empty chunk of the result
-                // TODO: Totals and extremes must be single chunks each!
-                totals = c.clone();
-                break;
-            }
-        }
-
-        Chunk extremes;
-        for (const auto & c : decompressed_chunks)
-        {
-            if (!c.empty())
-            {
-                extremes = c.clone();
-                break;
-            }
-        }
-
-        auto source_from_chunks = std::make_shared<SourceFromChunks>(entry->key.header, std::move(decompressed_chunks), std::move(totals), std::move(extremes));
-
-        auto out_it = source_from_chunks->getOutputs().begin();
-        auto * out1 = &*out_it;
-        out_it++;
-        auto * out2 = &*out_it;
-        out_it++;
-        auto * out3 = &*out_it;
-
-        pipe = Pipe(source_from_chunks, out1, out2, out3);
+        /// Chunk totals;
+        /// for (const auto & c : decompressed_chunks)
+        /// {
+        ///     if (!c.empty())
+        ///     {
+        ///         // for test purposes, clone the 1st non-empty chunk of the result
+        ///         // TODO: Totals and extremes must be single chunks each!
+        ///         totals = c.clone();
+        ///         break;
+        ///     }
+        /// }
+        ///
+        /// Chunk extremes;
+        /// for (const auto & c : decompressed_chunks)
+        /// {
+        ///     if (!c.empty())
+        ///     {
+        ///         extremes = c.clone();
+        ///         break;
+        ///     }
+        /// }
     }
+
 
     LOG_TRACE(&Poco::Logger::get("QueryCache"), "Entry found for query {}", key.queryStringFromAst());
 }
@@ -432,7 +484,7 @@ std::vector<QueryCache::Cache::KeyMapped> QueryCache::dump() const
 }
 
 QueryCache::QueryCache()
-    : cache(std::make_unique<TTLCachePolicy<Key, Chunks, KeyHasher, QueryResultWeight, IsStale>>())
+    : cache(std::make_unique<TTLCachePolicy<Key, Entry, KeyHasher, QueryCacheEntryWeight, IsStale>>())
 {
 }
 

@@ -3,54 +3,41 @@
 namespace DB
 {
 
-SourceFromChunks::SourceFromChunks(Block header, Chunks chunks_)
+SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_)
     : ISource(std::move(header))
     , chunks(std::make_shared<Chunks>(std::move(chunks_)))
     , it(chunks->begin())
-    , move_from_chunks(true)
 {
 }
 
-SourceFromChunks::SourceFromChunks(
-    Block header, Chunks chunks_, Chunk other,  WithTotalsOutputTag tag)
+SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && other,  WithTotalsOutputTag tag)
     : ISource(std::move(header), tag)
     , chunks(std::make_shared<Chunks>(std::move(chunks_)))
     , it(chunks->begin())
-    , move_from_chunks(true)
     , chunk_totals(std::move(other))
 {
     chassert(!chunk_totals.empty());
 }
 
-SourceFromChunks::SourceFromChunks(
-    Block header, Chunks chunks_, Chunk other,  WithExtremesOutputTag tag)
+SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && other,  WithExtremesOutputTag tag)
     : ISource(std::move(header), tag)
     , chunks(std::make_shared<Chunks>(std::move(chunks_)))
     , it(chunks->begin())
-    , move_from_chunks(true)
     , chunk_extremes(std::move(other))
 {
     chassert(!chunk_extremes.empty());
 }
 
-SourceFromChunks::SourceFromChunks(Block header, Chunks chunks_, Chunk totals_, Chunk extremes_)
+SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && totals_, Chunk && extremes_)
     : ISource(std::move(header), WithTotalsAndExtremesOutputTag())
     , chunks(std::make_shared<Chunks>(std::move(chunks_)))
     , it(chunks->begin())
-    , move_from_chunks(true)
     , chunk_totals(std::move(totals_))
     , chunk_extremes(std::move(extremes_))
 {
     chassert(!chunk_totals.empty());
     chassert(!chunk_extremes.empty());
 }
-
-SourceFromChunks::SourceFromChunks(Block header, std::shared_ptr<Chunks> chunks_)
-    : ISource(std::move(header))
-    , chunks(chunks_)
-    , it(chunks->begin())
-    , move_from_chunks(false)
-{}
 
 SourceFromChunks::Status SourceFromChunks::prepare()
 {
@@ -115,18 +102,11 @@ String SourceFromChunks::getName() const
 Chunk SourceFromChunks::generate()
 {
     if (it != chunks->end())
-        if (move_from_chunks)
-        {
-            Chunk && chunk = std::move(*it);
-            it++;
-            return chunk;
-        }
-        else
-        {
-            Chunk chunk = it->clone();
-            it++;
-            return chunk;
-        }
+    {
+        Chunk && chunk = std::move(*it);
+        it++;
+        return chunk;
+    }
     else
         return {};
 }

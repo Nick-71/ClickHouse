@@ -50,7 +50,8 @@ public:
         /// When does the entry expire?
         const std::chrono::time_point<std::chrono::system_clock> expires_at;
 
-        /// Is the entry compressed?
+        /// Are the chunks in the entry compressed?
+        /// (we could theoretically also compress totals and extremes but it's an obscure use case)
         const bool is_compressed;
 
         Key(ASTPtr ast_,
@@ -63,15 +64,22 @@ public:
         String queryStringFromAst() const;
     };
 
+    struct Entry
+    {
+        Chunks chunks;
+        std::optional<Chunk> totals = std::nullopt;
+        std::optional<Chunk> extremes = std::nullopt;
+    };
+
 private:
     struct KeyHasher
     {
         size_t operator()(const Key & key) const;
     };
 
-    struct QueryResultWeight
+    struct QueryCacheEntryWeight
     {
-        size_t operator()(const Chunks & chunks) const;
+        size_t operator()(const Entry & entry) const;
     };
 
     struct IsStale
@@ -80,7 +88,7 @@ private:
     };
 
     /// query --> query result
-    using Cache = CacheBase<Key, Chunks, KeyHasher, QueryResultWeight>;
+    using Cache = CacheBase<Key, Entry, KeyHasher, QueryCacheEntryWeight>;
 
     /// query --> query execution count
     using TimesExecuted = std::unordered_map<Key, size_t, KeyHasher>;
@@ -100,7 +108,7 @@ public:
     class Writer
     {
     public:
-        void buffer(Chunk && partial_query_result);
+        void buffer(Chunk && partial_query_result_chunk);
         void finalizeWrite();
     private:
         std::mutex mutex;
@@ -114,7 +122,7 @@ public:
         const std::chrono::milliseconds min_query_runtime;
         const bool squash_partial_results;
         const size_t max_block_size;
-        std::shared_ptr<Chunks> query_result TSA_GUARDED_BY(mutex) = std::make_shared<Chunks>();
+        Cache::MappedPtr query_result TSA_GUARDED_BY(mutex) = std::make_shared<Entry>();
         std::atomic<bool> skip_insert = false;
         bool was_finalized = false;
 
@@ -135,6 +143,7 @@ public:
         Pipe && getPipe(); /// must be called only if hasCacheEntryForKey() returns true
     private:
         Reader(Cache & cache_, const Key & key, const std::lock_guard<std::mutex> &);
+        void buildPipe(Block header, Chunks && chunks, const std::optional<Chunk> & totals, const std::optional<Chunk> & extremes);
         Pipe pipe;
         friend class QueryCache; /// for createReader()
     };
