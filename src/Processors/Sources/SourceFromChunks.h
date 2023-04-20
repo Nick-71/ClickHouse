@@ -26,14 +26,13 @@ protected:
     Chunk generate() override;
 
 private:
-    const std::shared_ptr<Chunks> chunks;
+    Chunks chunks;
     Chunks::iterator it;
 
     Chunk chunk_totals;
     Chunk chunk_extremes;
 
     bool finished_chunks = false;
-
 };
 
 }

@@ -5,15 +5,15 @@ namespace DB
 
 SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_)
     : ISource(std::move(header))
-    , chunks(std::make_shared<Chunks>(std::move(chunks_)))
-    , it(chunks->begin())
+    , chunks(std::move(chunks_))
+    , it(chunks.begin())
 {
 }
 
 SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && other,  WithTotalsOutputTag tag)
     : ISource(std::move(header), tag)
-    , chunks(std::make_shared<Chunks>(std::move(chunks_)))
-    , it(chunks->begin())
+    , chunks(std::move(chunks_))
+    , it(chunks.begin())
     , chunk_totals(std::move(other))
 {
     chassert(!chunk_totals.empty());
@@ -21,8 +21,8 @@ SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && oth
 
 SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && other,  WithExtremesOutputTag tag)
     : ISource(std::move(header), tag)
-    , chunks(std::make_shared<Chunks>(std::move(chunks_)))
-    , it(chunks->begin())
+    , chunks(std::move(chunks_))
+    , it(chunks.begin())
     , chunk_extremes(std::move(other))
 {
     chassert(!chunk_extremes.empty());
@@ -30,8 +30,8 @@ SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && oth
 
 SourceFromChunks::SourceFromChunks(Block header, Chunks && chunks_, Chunk && totals_, Chunk && extremes_)
     : ISource(std::move(header), WithTotalsAndExtremesOutputTag())
-    , chunks(std::make_shared<Chunks>(std::move(chunks_)))
-    , it(chunks->begin())
+    , chunks(std::move(chunks_))
+    , it(chunks.begin())
     , chunk_totals(std::move(totals_))
     , chunk_extremes(std::move(extremes_))
 {
@@ -101,7 +101,7 @@ String SourceFromChunks::getName() const
 
 Chunk SourceFromChunks::generate()
 {
-    if (it != chunks->end())
+    if (it != chunks.end())
     {
         Chunk && chunk = std::move(*it);
         it++;
